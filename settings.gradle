@@ -17,5 +17,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "ThriveOrSurvive"
 include ':desktop'
-include ':pc-vr'
+// include ':pc-vr'
 include ':game'
