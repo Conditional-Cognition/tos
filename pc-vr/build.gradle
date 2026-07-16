@@ -1,0 +1,213 @@
+plugins {
+    id 'application'
+    id "de.undercouch.download" version "5.1.0"
+    id "io.github.0ffz.github-packages" version "1.2.1" // Plugin for anonymous inclusion of artifacts hosted in github package registry
+}
+
+group 'com.cogworksstudios.thriveorsurvive'
+version '1.0.0'
+mainClassName = 'com.cogworksstudios.thriveorsurvive.pcvr.VrLauncher'
+String dependenciesString = ""
+
+dependencies {
+    implementation project(path: ':game')
+    implementation libs.jmeDesktop
+    implementation libs.jmeLwjgl3
+    implementation libs.tamarinPcVr
+
+
+}
+task copyJars(type: Copy) {
+    from (sourceSets.main.runtimeClasspath){
+        include '**/*.jar'
+    }
+    from(sourceSets.main.compileClasspath){
+        include '**/*.jar'
+    }
+    into('build/libs/dependencies')
+    includeEmptyDirs = false
+    setDuplicatesStrategy(DuplicatesStrategy.EXCLUDE)
+}
+/**
+ * Better approach described below, but the 2 of them are vial ones
+ */
+task createJar(type : Jar, dependsOn : copyJars){
+    //get the copied jars
+    final String project = rootDir.getPath()
+    final File dependencies = new File(project + "/desktop/build/libs/dependencies/")
+    if(dependencies.exists()) {
+        if (dependencies.listFiles().length > 0) {
+            final File[] files = dependencies.listFiles()
+            for (int i = 0; i < files.length; i++) {
+                final String fileName = files[i].getName()
+                if (fileName.contains(".jar")) {
+                    dependenciesString += "dependencies/" + fileName + " "
+                }
+            }
+        }
+    }
+    manifest{
+        attributes('Main-Class': mainClassName)
+        //pass the jars to the manifest
+        attributes('Class-Path' : dependenciesString)
+        attributes('Created-By' : 'Jme3-Gradle')
+    }
+    with jar
+}
+/**
+ * A Suggestion of better code by : Mikhail Bobrutskov (aka wizzardo)
+ */
+task releaseJar(type: Jar, dependsOn: copyJars) {
+    manifest {
+        attributes("Main-Class": mainClassName,
+                "Class-Path": sourceSets.main.runtimeClasspath.filter {it.isFile() }.collect { "dependencies/${it.name}" }.join(' '))
+    }
+    //tag the jar task to inject this task into it
+    with jar
+}
+
+distZip {
+    //having a degenerate folder within the dist zip complicates generating the other zips
+    eachFile { file ->
+        String path = file.relativePath
+        file.setPath(path.substring(path.indexOf("/") + 1, path.length()))
+    }
+    includeEmptyDirs(false)
+}
+
+//See https://api.adoptium.net/v3/assets/feature_releases/21/ga?image_type=jre for jre urls
+def windowsJreUrl = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jre_x64_windows_hotspot_21.0.10_7.zip"
+def linuxJreUrl = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jre_x64_linux_hotspot_21.0.10_7.tar.gz"
+def macJreUrl = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jre_aarch64_mac_hotspot_21.0.10_7.tar.gz"
+
+
+task downloadWindowsJre(type: Download) {
+    src windowsJreUrl
+    dest new File(buildDir, '/jres/windowsJre.zip')
+    overwrite false
+}
+
+task downloadAndUnzipWindowsJre(dependsOn: downloadWindowsJre, type: Copy) {
+    from zipTree(downloadWindowsJre.dest)
+    into "${buildDir}/jres/windowsJre/"
+    includeEmptyDirs(false)
+    filesMatching("**") {
+        it.path = it.path.replaceAll("^[a-zA-Z0-9.+-]*[/\\\\]", "jre/") //rename the top level to something standard so the rest of the script will be easier
+    }
+}
+
+task buildWindowsDistribution(dependsOn: [distZip, downloadAndUnzipWindowsJre], type: Copy)
+{
+    group 'distribution'
+    from files("${projectDir}/scripts/desktopDeployment/ThriveOrSurvive.bat"), zipTree(distZip.archiveFile), "${buildDir}/jres/windowsJre"
+    into new File(buildDir, 'distributions/ThriveOrSurvive-windows')
+    includeEmptyDirs false
+    exclude 'bin/**' //we are adding our own run scripts, exclude the ones coming from distZip
+}
+
+task zipWindowsDistribution( dependsOn:buildWindowsDistribution, type: Zip) {
+    group 'distribution'
+    archiveFileName = "ThriveOrSurvive-windows.zip"
+    destinationDirectory = file("$buildDir/distributions")
+    from "$buildDir/distributions/ThriveOrSurvive-windows"
+}
+
+
+task downloadLinuxJre(type: Download) {
+    src linuxJreUrl
+    dest new File(buildDir, '/jres/linuxJre.tar.gz')
+    overwrite false
+}
+
+task downloadAndUnzipLinuxJre(dependsOn: downloadLinuxJre, type: Copy) {
+    from tarTree(downloadLinuxJre.dest)
+    into "${buildDir}/jres/linuxJre/"
+    includeEmptyDirs(false)
+    filesMatching("**") {
+        it.path = it.path.replaceAll("^[a-zA-Z0-9.+-]*[/\\\\]", "jre/") //rename the top level to something standard so the rest of the script will be easier
+    }
+}
+
+task buildLinuxDistribution(dependsOn: [distZip, downloadAndUnzipLinuxJre], type: Copy)
+{
+    group 'distribution'
+    from files("${projectDir}/scripts/desktopDeployment/ThriveOrSurvive.sh"){
+        fileMode 0755
+    }
+    from zipTree(distZip.archiveFile)
+    from "${buildDir}/jres/linuxJre"
+    into new File(buildDir, 'distributions/ThriveOrSurvive-linux')
+    includeEmptyDirs false
+    exclude 'bin/**' //we are adding our own run scripts, exclude the ones coming from distZip
+}
+
+task zipLinuxDistribution( dependsOn:buildLinuxDistribution, type: Zip) {
+    group 'distribution'
+    archiveFileName = "ThriveOrSurvive-linux.tar.gz"
+    destinationDirectory = file("$buildDir/distributions")
+    from ("$buildDir/distributions/ThriveOrSurvive-linux"){
+      include('**.sh')
+      include('**/java')
+      fileMode 0755
+    }
+    from ("$buildDir/distributions/ThriveOrSurvive-linux"){
+        exclude('**.sh')
+        exclude('**/java')
+    }
+}
+
+
+task downloadMacJre(type: Download) {
+    src macJreUrl
+    dest new File(buildDir, '/jres/macJre.tar.gz')
+    overwrite false
+}
+
+task downloadAndUnzipMacJre(dependsOn: downloadMacJre, type: Copy) {
+    from tarTree(downloadMacJre.dest)
+    into "${buildDir}/jres/macJre/"
+    includeEmptyDirs(false)
+    filesMatching("**") {
+        it.path = it.path.replaceAll("^[a-zA-Z0-9.+-]*[/\\\\]", "jre/") //rename the top level to something standard so the rest of the script will be easier
+    }
+}
+
+task buildMacDistribution(dependsOn: [distZip, downloadAndUnzipMacJre], type: Copy)
+{
+    group 'distribution'
+    from files("${projectDir}/scripts/desktopDeployment/ThriveOrSurvive.command"){
+        fileMode 0755
+    }
+    from zipTree(distZip.archiveFile) 
+    from "${buildDir}/jres/macJre"
+    into new File(buildDir, 'distributions/ThriveOrSurvive-mac')
+    includeEmptyDirs false
+    exclude 'bin/**' //we are adding our own run scripts, exclude the ones coming from distZip
+}
+
+task zipMacDistribution( dependsOn:buildMacDistribution, type: Zip) {
+    group 'distribution'
+    archiveFileName = "ThriveOrSurvive-mac.tar.gz"
+    destinationDirectory = file("$buildDir/distributions")
+    from ("$buildDir/distributions/ThriveOrSurvive-mac"){
+      include('**.command')
+      include('**/java')
+      fileMode 0755
+    }
+    from ("$buildDir/distributions/ThriveOrSurvive-mac"){
+        exclude('**.command')
+        exclude('**/java')
+    }
+}
+
+task buildAllDistributions{
+    group 'distribution'
+    dependsOn 'zipWindowsDistribution'
+    dependsOn 'zipLinuxDistribution'
+    dependsOn 'zipMacDistribution'
+
+    doLast {
+        println("Distributions created in build/distributions folder")
+    }
+}
+
